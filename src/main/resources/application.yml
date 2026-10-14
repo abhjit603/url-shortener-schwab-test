@@ -1,0 +1,45 @@
+server:
+  port: 8080
+
+app:
+  base-url: http://localhost:${server.port}
+  data-path: ./data/url-shortener
+
+spring:
+  mvc:
+    problemdetails:
+      enabled: true
+  application:
+    name: url-shortener
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+        add-additional-paths: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  pattern:
+    console: "%d{ISO8601} [%thread] %-5level traceId=%X{traceId} event=%X{event} code=%X{code} outcome=%X{outcome} - %msg%n"
