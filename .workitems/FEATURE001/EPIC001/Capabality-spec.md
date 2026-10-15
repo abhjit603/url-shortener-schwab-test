@@ -36,6 +36,7 @@
 ## L4 — Agentic Missions Breakdown · owner: Decomposer
 
 - **Breakdown:** `decomposition.md` — S30001 foundation; S30002 Greenfield core (create+resolve); S30003 Brownfield analytics/reliability/docs. DAG: S30001 → S30002 → S30003. Optional process notes: repo `README.md`.
+- **Decomposer addendum (2026-10-15T04:10:43Z):** S30004 adds bounded local redirect metadata caching after the S30003 analytics baseline. Future multi-instance deployment couples server-database migration with shared-cache adoption and cross-instance invalidation design in one work item.
 
 ## L5 — Validation Criteria · owner: Validator
 

@@ -4,12 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-import com.urlshortener.domain.ShortLink;
 import com.urlshortener.error.ApiException;
 import com.urlshortener.error.ErrorCode;
 import com.urlshortener.service.AnalyticsService;
 import com.urlshortener.service.LinkService;
-import java.time.Instant;
+import com.urlshortener.service.RedirectTarget;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -20,7 +19,7 @@ class RedirectControllerTest {
     void analyticsFailurePreventsRedirectAndReturnsStoreUnavailable() {
         String code = "Ab3CdEf";
     LinkService linkService = serviceReturning(
-        new ShortLink(code, "https://example.com/", true, Instant.now(), "https://example.com/"));
+        new RedirectTarget(code, "https://example.com/", true));
     AnalyticsService analyticsService = new AnalyticsService(null, null) {
         @Override
         public void incrementCurrentMinute(String ignoredCode) {
@@ -39,7 +38,7 @@ class RedirectControllerTest {
     void inactiveLinkDoesNotIncrementAnalytics() {
         String code = "Ab3CdEf";
         LinkService linkService = serviceReturning(
-                new ShortLink(code, "https://example.com/", false, Instant.now(), null));
+                new RedirectTarget(code, "https://example.com/", false));
         AtomicBoolean incrementCalled = new AtomicBoolean();
         AnalyticsService analyticsService = new AnalyticsService(null, null) {
             @Override
@@ -56,10 +55,10 @@ class RedirectControllerTest {
         assertFalse(incrementCalled.get());
     }
 
-    private LinkService serviceReturning(ShortLink link) {
-        return new LinkService(null, null, null, null, null) {
+    private LinkService serviceReturning(RedirectTarget link) {
+        return new LinkService(null, null, null, null, null, null) {
             @Override
-            public ShortLink resolveForRedirect(String ignoredCode) {
+            public RedirectTarget resolveForRedirect(String ignoredCode) {
                 return link;
             }
         };

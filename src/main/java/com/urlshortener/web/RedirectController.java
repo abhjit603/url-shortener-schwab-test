@@ -1,10 +1,10 @@
 package com.urlshortener.web;
 
-import com.urlshortener.domain.ShortLink;
 import com.urlshortener.error.ApiException;
 import com.urlshortener.error.ErrorCode;
 import com.urlshortener.service.AnalyticsService;
 import com.urlshortener.service.LinkService;
+import com.urlshortener.service.RedirectTarget;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -28,8 +28,8 @@ public class RedirectController {
 
     @GetMapping(CODE_PATH)
     public ResponseEntity<Void> redirect(@PathVariable String code) {
-        ShortLink link = linkService.resolveForRedirect(code);
-        if (!link.isActive()) {
+        RedirectTarget link = linkService.resolveForRedirect(code);
+        if (!link.active()) {
             throw new ApiException(ErrorCode.LINK_INACTIVE, HttpStatus.GONE, "Link " + code + " is inactive");
         }
         try {
@@ -41,7 +41,7 @@ public class RedirectController {
         }
         RequestLoggingFilter.logEvent("redirect", code, "302");
         return ResponseEntity.status(HttpStatus.FOUND)
-                .header(HttpHeaders.LOCATION, link.getDestination())
+                .header(HttpHeaders.LOCATION, link.destination())
                 .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .build();
     }

@@ -16,6 +16,7 @@ documented in [README.md](README.md) and [docs/API.md](docs/API.md).
 | `STORY-001/` | S30001: durable store, health, and shared error contract |
 | `STORY-002/` | S30002: create, list, lookup, deactivate, and public resolve |
 | `STORY-003/` | S30003: click analytics, reliability regression, and documentation |
+| `STORY-004/` | S30004: bounded local redirect metadata cache |
 
 Each story directory contains a user story with acceptance criteria, a design
 with implementation decisions, and tasks with delivery/verification evidence.
@@ -23,10 +24,10 @@ with implementation decisions, and tasks with delivery/verification evidence.
 ## Traceability
 
 The identifiers connect the artifacts: F60001 is the feature, E50001 is its
-capability/epic, and S30001 through S30003 are the implementation stories.
+capability/epic, and S30001 through S30004 are the implementation stories.
 Outcome use cases map to capability acceptance criteria; story criteria refine
 those into behavior that can be tested. The decomposition records dependencies:
-`S30001 → S30002 → S30003`.
+`S30001 → S30002 → S30003 → S30004`.
 
 When details disagree, use `solution-arch.md` for the current cross-cutting
 contract and the relevant story acceptance criteria for story-specific gates.

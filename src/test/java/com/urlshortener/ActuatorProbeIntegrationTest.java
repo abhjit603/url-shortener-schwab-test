@@ -52,6 +52,8 @@ class ActuatorProbeIntegrationTest {
         assertUp("/actuator/health/readiness");
         assertUp("/livez");
         assertUp("/readyz");
+        mockMvc.perform(get("/actuator/metrics/cache.gets"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

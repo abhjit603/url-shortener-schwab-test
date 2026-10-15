@@ -10,12 +10,14 @@ history survive an application restart on the same machine.
 - Resolve active links with a `302` redirect. Deactivated links return `410`.
 - List, look up, and deactivate links through the admin API.
 - Read click totals in UTC minute buckets, including history for inactive links.
+- Cache hot redirect metadata in a bounded in-process Caffeine cache; H2 remains authoritative.
 - Expose health, liveness/readiness probes, and OpenAPI endpoints. The admin namespace is not authenticated.
 
 ## Technology
 
 - Java 21 and Spring Boot 3.3
 - Spring Boot Actuator health probes
+- Caffeine for bounded, process-local redirect metadata caching
 - Maven 3.9+
 - Spring Data JPA with an H2 file database
 - springdoc OpenAPI at `/api-docs` and `/swagger-ui.html`
@@ -31,7 +33,8 @@ mvn -q test
 The tests include unit coverage for URL normalization and cursor tokens, plus
 HTTP/service integration coverage for link lifecycle, cursor pagination,
 concurrent duplicate creates, analytics, file-store restart persistence,
-health up/down, and Actuator readiness/liveness behavior.
+health up/down, Actuator readiness/liveness behavior, redirect cache bounds,
+cache invalidation races, and the unchanged redirect analytics contract.
 
 If Maven Central is needed instead of the configured repository, use:
 
@@ -65,6 +68,8 @@ mvn spring-boot:run -s .mvn/settings-local-central.xml
 | `server.port` | `8080` | HTTP listen port |
 | `app.base-url` | `http://localhost:${server.port}` | Base used for returned `shortUrl`; never derived from `Host` |
 | `app.data-path` | `./data/url-shortener` | Directory for the H2 file database |
+| `app.cache.redirect.max-size` | `10000` | Maximum in-process redirect metadata entries |
+| `app.cache.redirect.ttl` | `5m` | Expire cached redirect metadata after this write age |
 
 Set values in `src/main/resources/application.yml`, environment variables, or
 Spring command-line arguments. For example:
@@ -75,7 +80,10 @@ mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=9090 --app.base-u
 
 The app creates the data directory when needed and does not fall back to an
 in-memory database. Stop the process before removing the directory to reset
-local data.
+local data. The redirect cache is process-local and rebuilds from H2 after a
+restart. Deactivation evicts cached metadata after its database transaction
+commits. These settings do not provide shared-cache consistency for multiple
+application instances.
 
 ## API Quick Start
 
@@ -124,5 +132,6 @@ http://localhost:8080/swagger-ui.html.
 These process notes are not product requirements. For an ambiguous requirement,
 record the decision and its trace to the affected workitem before changing
 behavior. Validate the S30002 lifecycle baseline before S30003
-analytics/reliability work, then run the full test suite and the local health
-and create/redirect/click smoke path.
+analytics/reliability work, then validate that baseline before S30004 cache
+work. Run the full test suite and the local health and create/redirect/click
+smoke path for implementation changes.

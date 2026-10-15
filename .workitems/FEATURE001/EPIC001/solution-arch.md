@@ -6,7 +6,7 @@ title: Short-link lifecycle, analytics, and local durability
 owner: abhjit603
 status: draft
 created: 2026-10-14T15:12:18Z
-updated: 2026-10-14T17:01:18Z
+updated: 2026-10-15T04:21:16Z
 ---
 
 # Solution Architecture (HLD): url-shortener — Short-link lifecycle, analytics, and local durability
@@ -17,11 +17,11 @@ Traces to: `../outcome-spec.md` and `./capability-spec.md`
 
 ## Functional Overview
 
-One new Spring Boot process on one machine serves operator/admin and visitor/user HTTP surfaces. Short links, active/inactive state, and UTC minute-bucketed click counts live in an embedded H2 file database so they survive a single process restart. This is a local single-system deployment; it is not distributed-ready.
+One Spring Boot process on one machine serves operator/admin and visitor/user HTTP surfaces. Short links, active/inactive state, and UTC minute-bucketed click counts live in an embedded H2 file database so they survive a single process restart. S30004 adds a bounded, in-process Caffeine cache for redirect metadata; H2 remains authoritative and the cache is disposable across restarts. This is a local single-system deployment; it is not distributed-ready.
 
-**In scope** (from the capability spec — not redefined here): create a usable short URL; public resolve; admin lookup/list/deactivate; UTC minute analytics including known-zero; durable H2 file; health that queries the store; duplicate-create safety; RFC 9457 errors; operator documentation after implementation. Actuator liveness/readiness probes are included as an additive operations enhancement while preserving the original `/health` contract.
+**In scope** (from the capability spec — not redefined here): create a usable short URL; public resolve; admin lookup/list/deactivate; UTC minute analytics including known-zero; durable H2 file; health that queries the store; duplicate-create safety; RFC 9457 errors; operator documentation after implementation; and the bounded local redirect cache in S30004. Actuator liveness/readiness probes are included as an additive operations enhancement while preserving the original `/health` contract.
 
-**Out of scope:** auth/RBAC; external DB and horizontal scale; distributed ID/code allocation or cache; async analytics/events and richer dimensions; custom domains, expiry, rate limit, abuse controls, destination fetch / URL-safety blocklist; metrics/tracing/SLOs; backup/restore/HA/multi-region; product web UI; billing; cluster. A built-in local target page, if added at all, is an optional developer convenience at the end of delivery and is not a correctness dependency.
+**Out of scope:** auth/RBAC; external DB and horizontal scale; distributed ID/code allocation and shared cache; async analytics/events and richer dimensions; custom domains, expiry, rate limit, abuse controls, destination fetch / URL-safety blocklist; broad metrics/tracing/SLOs; backup/restore/HA/multi-region; product web UI; billing; cluster. A built-in local target page, if added at all, is an optional developer convenience at the end of delivery and is not a correctness dependency.
 
 ### Functional assumptions
 
@@ -29,6 +29,7 @@ One new Spring Boot process on one machine serves operator/admin and visitor/use
 - No authentication. `/api/admin/**` is a namespace, not an enforced role.
 - Destinations are never fetched (no SSRF). Trailing slash, path, and query are significant.
 - Correctness target is bounded side-project scope on one machine.
+- The redirect cache exists only inside this process, is bounded and time-limited, and is never the durable source of truth.
 
 ## Design Considerations
 
@@ -38,6 +39,7 @@ One new Spring Boot process on one machine serves operator/admin and visitor/use
 - **Create:** `POST /api/admin/links` returns a usable `shortUrl` built from a configured base URL (local default `http://localhost` + configured port). Never derive the base from the `Host` header.
 - **Duplicate create:** at most one active row per normalized destination, enforced in the database (`active_destination_key`), not check-then-insert. Concurrent loser reads the winner and returns `200`.
 - **Redirect:** HTTP `302` + `Cache-Control: no-store`. Count an active redirect only after the increment transaction commits; store failure → `503` and no redirect.
+- **Redirect lookup cache (S30004):** cache only immutable code/destination/active metadata used by public redirect resolution. Use Caffeine with a configurable maximum size and write TTL; do not cache analytics, admin/list results, or unknown codes. Commit-aware deactivation invalidation prevents a stale active value from being reinserted by a concurrent cache miss. The HTTP response remains `Cache-Control: no-store`.
 - **Analytics:** UTC minute buckets (`bucketStart`, `count`) plus code, total, `bucketUnit`. Known-zero is `200` / total `0` / empty buckets. Inactive known links remain readable. Unknown is `404`.
 - **Deactivate:** idempotent for a known code; `200` with current resource; clear `active_destination_key`. Recreating that destination mints a new code; old history stays on the old code.
 - **Errors:** `application/problem+json` (RFC 9457). Never leak stack traces, SQL, filesystem paths, or destination secrets.
@@ -77,28 +79,31 @@ A single module with HTTP adapters, a small domain/application layer, and Spring
 
 Synchronous analytics (increment committed before `302`) is required for strong correctness on Option A. Async/event analytics is future scope.
 
-### Future Scope: Production Scale and Caching
+### Future Scope: Multi-instance Scale
 
-The current implementation targets one process and one local H2 file. It has no
-million-user throughput or latency guarantee, and no load-test evidence. The
-following work is deferred until a production-scale workload and service targets
-are defined:
+The current deployment targets one process and one local H2 file. S30004 covers
+only a local cache for that topology. It has no million-user throughput or
+latency guarantee, and no load-test evidence. Before horizontal scale, database
+and cache changes must be planned, validated, and released together as one
+future scale-out work item; neither is an independent prerequisite to the
+other:
 
-- **Server database and multiple instances:** migrate from H2 file storage to a
-  managed/server database, define schema migrations and connection-pool limits,
-  and make application instances stateless so they can scale horizontally.
+- **Database and shared-cache migration (one coupled change):** migrate from H2
+  file storage to a managed/server database, define schema migrations and
+  connection-pool limits, and make application instances stateless. As part of
+  that same change, adopt a shared cache (for example Redis) and define
+  cross-instance cache-fill/invalidation ordering, TTL fallback, and deactivation
+  consistency. Do not roll out a distributed cache separately from the database
+  migration, or scale app instances while they depend on H2 file storage.
 - **Database access paths:** measure real query plans and add indexes for active
   destination uniqueness, active-list filtering, and the keyset order
   `(created_at, code)`. Keep pagination cursor-based as the link table grows.
-- **Redirect cache:** after introducing the server database, measure lookup
-  latency and consider cache-aside storage for code-to-link mappings. A local
-  cache such as Caffeine is suitable only for a single app instance; a shared
-  cache such as Redis is appropriate when instances must share entries. Use a
-  bounded TTL and invalidate on create/deactivate. Deactivation must not return
-  success until stale entries can no longer serve redirects; if that guarantee
-  cannot be maintained across instances, consult authoritative state instead.
-  HTTP `Cache-Control: no-store` on redirects remains independent of this
-  internal cache. Do not cache click counters as link metadata.
+- **Scale-out gate:** begin the coupled database/shared-cache work only when
+  measured traffic or availability requirements justify multiple instances.
+  Preserve the public redirect contract and require that a successful
+  deactivation prevents subsequent redirect resolutions from serving the old
+  active value. HTTP `Cache-Control: no-store` remains independent of internal
+  caching. Do not cache click counters as link metadata.
 - **Analytics throughput:** benchmark concurrent redirects to the same popular
   code. If synchronous minute-bucket updates contend, consider a durable event
   or atomic/sharded-counter design. Preserve increment-commit-before-`302` unless
@@ -131,6 +136,7 @@ flowchart LR
     Health["Health"]
     Errors["Problem Details handler"]
     LinkSvc["LinkService"]
+    RedirectCache["Caffeine redirect metadata cache"]
     AnalyticsSvc["AnalyticsService"]
     Norm["UrlNormalizer"]
     Repos["ShortLink + ClickBucket repositories"]
@@ -144,6 +150,7 @@ flowchart LR
     Health --> Errors
     LinkSvc --> Norm
     LinkSvc --> AnalyticsSvc
+    LinkSvc --> RedirectCache
     LinkSvc --> Repos
     AnalyticsSvc --> Repos
     Repos --> Store
@@ -158,6 +165,7 @@ classDiagram
   class AdminLinkController
   class RedirectController
   class LinkService
+  class RedirectCache
   class AnalyticsService
   class UrlNormalizer
   class ShortLinkRepository
@@ -169,6 +177,7 @@ classDiagram
   AdminLinkController --> LinkService
   AdminLinkController --> AnalyticsService
   RedirectController --> LinkService
+  LinkService --> RedirectCache
   LinkService --> UrlNormalizer
   LinkService --> ShortLinkRepository
   LinkService --> AnalyticsService
@@ -226,13 +235,21 @@ sequenceDiagram
   actor Visitor
   participant RedirectController
   participant LinkService
+  participant RedirectCache as Caffeine redirect cache
   participant AnalyticsService
   participant ShortLinkRepository
   participant ClickBucketRepository
 
   Visitor->>RedirectController: GET /{code}
   RedirectController->>LinkService: resolve(code)
-  LinkService->>ShortLinkRepository: load by code
+  LinkService->>RedirectCache: resolve immutable link metadata by code
+  alt cache miss
+    RedirectCache-->>LinkService: miss
+    LinkService->>ShortLinkRepository: load by code
+    LinkService->>RedirectCache: cache found metadata
+  else cache hit
+    RedirectCache-->>LinkService: cached metadata
+  end
   alt unknown
     RedirectController-->>Visitor: 404 LINK_NOT_FOUND
   else inactive
@@ -307,7 +324,7 @@ sequenceDiagram
 | Capability ID | Capability | NFRs (performance, security, availability, scalability, observability, compatibility) | Priority |
 |---|---|---|---|
 | C-01a | Create usable short URL | Security: no auth now; never trust host; never fetch destination. Compatibility: absolute `http`/`https` only. Observability: structured create/reject logs (no full destination query string) | Must |
-| C-01b | Public resolve + analytics | Performance: one local process. Strong correctness: increment commits before `302`. Availability: store failure → `503`, no redirect. Cache: `Cache-Control: no-store`. No distributed cache | Must |
+| C-01b | Public resolve + analytics | Performance: one local process with bounded redirect metadata cache. Strong correctness: increment commits before `302`. Availability: store failure → `503`, no redirect. HTTP cache: `Cache-Control: no-store`. No distributed cache | Must |
 | C-01c | Admin manage + durability | Availability: H2 file on stable path; startup fail-fast; `/health` queries store. Scalability: single machine only. Observability: structured deactivate and store-error logs; optional `traceId` | Must |
 
 ## Integration Points
@@ -319,6 +336,7 @@ sequenceDiagram
 | I-03 | Health HTTP | In | `GET /health` — unauthenticated store probe |
 | I-04 | H2 file | Out (embedded) | JDBC file under configured data path |
 | I-05 | Actuator probes | In | `/actuator/health/liveness`, `/actuator/health/readiness`, `/livez`, and `/readyz`; only health is exposed over HTTP |
+| I-06 | Redirect metadata cache | In-process | Caffeine cache keyed by short code; H2 remains authoritative |
 
 No other processes, identity providers, or message buses.
 
@@ -337,7 +355,7 @@ No other processes, identity providers, or message buses.
 | Public exposure | Public: `GET /{code}`, `/health`, and Actuator health probes. Only the health endpoint is exposed over HTTP and health details are hidden. Admin: `/api/admin/**` (unauthenticated namespace, not a gateway/role split) |
 | AuthN/AuthZ | None in this scope. Full RBAC is future scope. Namespace separation only |
 | Rate limiting | N/A — future scope |
-| Observability | Structured logs on create, redirect outcome, deactivate, rejection, store error. Avoid logging full destination query strings. Include `traceId` when present. Metrics are future scope |
+| Observability | Structured logs on create, redirect outcome, deactivate, rejection, store error. Avoid logging full destination query strings. Include `traceId` when present. Cache statistics are available to the in-process metrics registry; no additional Actuator HTTP endpoint is exposed in S30004 |
 | Contract BWC | New service. Later auth or extra fields should be additive. Public path `GET /{code}` stays stable |
 
 ### HTTP surface (normative)
@@ -393,6 +411,8 @@ No other processes, identity providers, or message buses.
 | `server.port` | `8080` | Listen port |
 | `app.base-url` | `http://localhost:${server.port}` | Used to mint `shortUrl`; never from Host |
 | `app.data-path` | `./data/url-shortener` | Relative to documented working directory; create if missing; fail startup if unusable |
+| `app.cache.redirect.max-size` | `10000` | Maximum entries; configurable and bounded |
+| `app.cache.redirect.ttl` | `5m` | Expire after write; initial default to tune from measured workload |
 
 No secrets store, no remote config, no init-data product. Document reset/cleanup as “stop the process and delete the data directory” (or equivalent) in the README.
 
@@ -438,7 +458,7 @@ N/A for a blue/green or multi-instance cutover. Upgrade on this machine is stop 
 |---|---|
 | Idempotency | Active duplicate create → `200` existing. Deactivate known code → `200` current resource even if already inactive |
 | Concurrency | Enforce with DB unique constraints inside a transaction. No check-then-insert. Concurrent duplicate create: loser reads winner → `200`. Code: unique constraint + 5 retries |
-| Cache | Public `302` sends `Cache-Control: no-store`. No application cache. No distributed cache |
+| Cache | S30004 uses a bounded Caffeine cache-aside lookup for redirect metadata only. Cache immutable values, not JPA entities; skip negative caching; never cache click counts. Invalidate affected entries after committed writes, with synchronization/fencing so a concurrent cache load cannot restore stale active state after deactivation. The public `302` remains `Cache-Control: no-store`. No distributed cache in this deployment |
 | Transaction boundaries | Create insert (or conflict read) is one transaction. Deactivate (set inactive + NULL key) is one transaction. Analytics increment is one transaction that must commit before `302`. Do not redirect if that commit fails |
 | DB pool / timeouts | Embedded H2 in-process; fail health/create/redirect with `503` if the store cannot serve a query. No in-memory fallback |
 | REST read timeouts | N/A outbound — destinations are not fetched |
@@ -473,7 +493,7 @@ Never fetch the destination. URL-safety / blocklist is future scope.
 
 ## Delivery and scenarios
 
-Implementation follows three app stories only: **S30001 → S30002 → S30003** (see `decomposition.md`). **Greenfield** is S30001+S30002; **Brownfield** is S30003 on the S30002 baseline.
+Implementation follows four app stories: **S30001 → S30002 → S30003 → S30004** (see `Decomposition.md`). **Greenfield** is S30001+S30002; **Brownfield** is S30003 on the S30002 baseline; S30004 adds the bounded single-process redirect cache on the completed analytics behavior.
 
 Optional ambiguous-requirement and delivery/release checklists (human approval, re-plan notes, validation gates, rollback notes, short summary) are in repo `README.md` — not separate epic stories and not part of the runtime.
 

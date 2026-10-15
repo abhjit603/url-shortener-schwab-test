@@ -4,6 +4,10 @@ server:
 app:
   base-url: http://localhost:${server.port}
   data-path: ./data/url-shortener
+  cache:
+    redirect:
+      max-size: 10000
+      ttl: 5m
 
 spring:
   mvc:

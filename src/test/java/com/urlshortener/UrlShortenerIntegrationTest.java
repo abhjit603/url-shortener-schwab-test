@@ -13,7 +13,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.urlshortener.domain.ShortLink;
 import com.urlshortener.repository.ClickBucketRepository;
 import com.urlshortener.repository.ShortLinkRepository;
 import com.urlshortener.service.AnalyticsService;
@@ -44,6 +43,8 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(properties = "app.base-url=http://short.test")
 @AutoConfigureMockMvc
@@ -70,6 +71,9 @@ class UrlShortenerIntegrationTest {
 
     @Autowired
     private AnalyticsService analyticsService;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @DynamicPropertySource
     static void configureTestDatabase(DynamicPropertyRegistry registry) {
@@ -158,9 +162,14 @@ class UrlShortenerIntegrationTest {
                 .andExpect(header().string("Location", "https://example.com/path?q=1"))
                 .andExpect(header().string("Cache-Control", "no-store"));
 
+        mockMvc.perform(get("/{code}", code))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://example.com/path?q=1"))
+                .andExpect(header().string("Cache-Control", "no-store"));
+
         mockMvc.perform(get("/api/admin/links/{code}/clicks", code))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.total").value(2))
                 .andExpect(jsonPath("$.bucketUnit").value("minute"))
                 .andExpect(jsonPath("$.buckets.length()").value(1));
 
@@ -176,7 +185,7 @@ class UrlShortenerIntegrationTest {
                 .andExpect(jsonPath("$.code").value("LINK_INACTIVE"));
         mockMvc.perform(get("/api/admin/links/{code}/clicks", code))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.total").value(1));
+                .andExpect(jsonPath("$.total").value(2));
 
         JsonNode recreated = createLink("https://example.com/path?q=1", null, 201);
         assertNotEquals(code, recreated.get("code").asText());
@@ -186,6 +195,26 @@ class UrlShortenerIntegrationTest {
                         .param("active", "false"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.links[?(@.code=='" + code + "')].active").value(false));
+    }
+
+    @Test
+    void rolledBackDeactivateLeavesWarmCacheAndDatabaseActive() throws Exception {
+        String code = linkService.create("https://example.com/rollback/" + UUID.randomUUID())
+                .link()
+                .getCode();
+        assertTrue(linkService.resolveForRedirect(code).active());
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> transaction.executeWithoutResult(status -> {
+            linkService.deactivate(code);
+            throw new IllegalStateException("force rollback after deactivation");
+        }));
+
+        mockMvc.perform(get("/{code}", code))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Cache-Control", "no-store"));
+        assertTrue(shortLinkRepository.findById(code).orElseThrow().isActive());
+        assertEquals(1, analyticsService.stats(code).total());
     }
 
     @Test
@@ -331,8 +360,8 @@ class UrlShortenerIntegrationTest {
         try (ConfigurableApplicationContext restarted = new SpringApplicationBuilder(UrlShortenerApplication.class)
                 .web(WebApplicationType.NONE)
                 .run(arguments)) {
-            ShortLink link = restarted.getBean(LinkService.class).resolveForRedirect(code);
-            assertTrue(link.isActive());
+            var link = restarted.getBean(LinkService.class).resolveForRedirect(code);
+            assertTrue(link.active());
             assertEquals(1, restarted.getBean(AnalyticsService.class).stats(code).total());
         }
     }

@@ -13,6 +13,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class LinkService {
@@ -24,18 +26,21 @@ public class LinkService {
     private final ShortCodeGenerator codeGenerator;
     private final AppProperties appProperties;
     private final LinkCursorCodec cursorCodec;
+    private final RedirectMetadataCache redirectMetadataCache;
 
     public LinkService(
             ShortLinkRepository repository,
             UrlNormalizer normalizer,
             ShortCodeGenerator codeGenerator,
             AppProperties appProperties,
-            LinkCursorCodec cursorCodec) {
+            LinkCursorCodec cursorCodec,
+            RedirectMetadataCache redirectMetadataCache) {
         this.repository = repository;
         this.normalizer = normalizer;
         this.codeGenerator = codeGenerator;
         this.appProperties = appProperties;
         this.cursorCodec = cursorCodec;
+        this.redirectMetadataCache = redirectMetadataCache;
     }
 
     public CreateOutcome create(String rawDestination) {
@@ -54,6 +59,7 @@ public class LinkService {
 
             try {
                 repository.saveAndFlush(link);
+                invalidateAfterCommit(code);
                 return CreateOutcome.created(link);
             } catch (DataIntegrityViolationException ex) {
                 Optional<ShortLink> winner =
@@ -98,11 +104,25 @@ public class LinkService {
             link.deactivate();
             repository.save(link);
         }
+        invalidateAfterCommit(code);
         return link;
     }
 
-    public ShortLink resolveForRedirect(String code) {
-        return require(code);
+    public RedirectTarget resolveForRedirect(String code) {
+        return redirectMetadataCache.getOrLoad(code, requestedCode -> RedirectTarget.from(require(requestedCode)));
+    }
+
+    private void invalidateAfterCommit(String code) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    redirectMetadataCache.invalidate(code);
+                }
+            });
+        } else {
+            redirectMetadataCache.invalidate(code);
+        }
     }
 
     public String shortUrl(String code) {
