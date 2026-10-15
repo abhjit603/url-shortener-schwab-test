@@ -1,0 +1,52 @@
+{
+  "feature_seq": 1,
+  "capability_seq": 1,
+  "story_seq": 4,
+  "allocated": {
+    "F60001": {
+      "type": "feature",
+      "slug": "url-shortener",
+      "title": "URL Shortener Service",
+      "created": "2026-10-14T14:44:59Z"
+    },
+    "E50001": {
+      "type": "epic",
+      "feature": "F60001",
+      "slug": "url-shortener",
+      "title": "Short-link lifecycle, analytics, and local durability",
+      "created": "2026-10-14T14:44:59Z"
+    },
+    "S30001": {
+      "type": "story",
+      "feature": "F60001",
+      "epic": "E50001",
+      "slug": "url-shortener",
+      "title": "Service foundation and error contract",
+      "created": "2026-10-14T16:29:38Z"
+    },
+    "S30002": {
+      "type": "story",
+      "feature": "F60001",
+      "epic": "E50001",
+      "slug": "url-shortener",
+      "title": "Greenfield core link lifecycle",
+      "created": "2026-10-14T16:29:38Z"
+    },
+    "S30003": {
+      "type": "story",
+      "feature": "F60001",
+      "epic": "E50001",
+      "slug": "url-shortener",
+      "title": "Brownfield analytics, reliability, and documentation",
+      "created": "2026-10-14T16:29:38Z"
+    },
+    "S30004": {
+      "type": "story",
+      "feature": "F60001",
+      "epic": "E50001",
+      "slug": "url-shortener",
+      "title": "Bounded local redirect metadata cache",
+      "created": "2026-10-15T04:10:43Z"
+    }
+  }
+}
